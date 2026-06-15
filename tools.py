@@ -69,8 +69,38 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    # Step 2: filter by max_price and size (if provided)
+    filtered = []
+    for listing in listings:
+        if max_price is not None and listing["price"] > max_price:
+            continue
+        if size is not None and size.lower() not in listing["size"].lower():
+            continue
+        filtered.append(listing)
+
+    # Step 3: score each remaining listing by keyword overlap with description
+    keywords = [kw for kw in description.lower().split() if kw]
+    scored = []
+    for listing in filtered:
+        searchable_text = " ".join(
+            [
+                listing["title"],
+                listing["description"],
+                " ".join(listing["style_tags"]),
+            ]
+        ).lower()
+
+        score = sum(1 for kw in keywords if kw in searchable_text)
+
+        # Step 4: drop listings with no keyword overlap
+        if score > 0:
+            scored.append((score, listing))
+
+    # Step 5: sort by score, highest first, and return the listing dicts
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [listing for _, listing in scored]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +130,65 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    items = wardrobe.get("items", [])
+
+    item_summary = (
+        f"{new_item['title']}: {new_item['description']} "
+        f"(category: {new_item['category']}, colors: {', '.join(new_item['colors'])}, "
+        f"style tags: {', '.join(new_item['style_tags'])})"
+    )
+
+    if not items:
+        # Step 2: empty wardrobe -> general styling advice
+        prompt = (
+            "A user is considering buying this secondhand item:\n"
+            f"- {item_summary}\n\n"
+            "They don't have any wardrobe items saved yet. Give general styling "
+            "advice in 2-3 sentences: what kinds of pieces (colors, silhouettes, "
+            "categories) would pair well with this item, and what overall vibe "
+            "or outfit it would suit."
+        )
+    else:
+        # Step 3: non-empty wardrobe -> suggest specific pairings by name
+        wardrobe_lines = "\n".join(
+            f"- {it['name']} (category: {it['category']}, colors: {', '.join(it['colors'])}, "
+            f"style tags: {', '.join(it['style_tags'])}"
+            + (f", notes: {it['notes']}" if it.get("notes") else "")
+            + ")"
+            for it in items
+        )
+        prompt = (
+            "A user is considering buying this secondhand item:\n"
+            f"- {item_summary}\n\n"
+            "Here is their current wardrobe:\n"
+            f"{wardrobe_lines}\n\n"
+            "Suggest 1-2 complete outfits that pair the new item with specific "
+            "pieces from this wardrobe, referring to them by name. Describe the "
+            "overall vibe and any concrete styling tips (tucking, layering, "
+            "rolling sleeves, etc.). Keep it to 2-4 sentences."
+        )
+
+    # Step 4: call the LLM and return its response as a string
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300,
+        )
+        result = response.choices[0].message.content.strip()
+        if result:
+            return result
+        return (
+            f"The {new_item['title']} is versatile and would work well with "
+            "casual basics in neutral tones."
+        )
+    except Exception:
+        return (
+            "Couldn't generate styling suggestions right now, but here's the "
+            f"item: {new_item['title']}."
+        )
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +220,46 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # Step 1: guard against an empty or whitespace-only outfit string
+    if not outfit or not outfit.strip():
+        return (
+            f"Couldn't generate a fit card for {new_item['title']} — "
+            "no outfit suggestion was available to build a caption from."
+        )
+
+    # Step 2: build the prompt
+    prompt = (
+        "Write a short, casual Instagram/TikTok-style caption (2-4 sentences) "
+        "for an outfit-of-the-day post featuring this thrifted item:\n"
+        f"- Item: {new_item['title']}\n"
+        f"- Price: ${new_item['price']}\n"
+        f"- Platform: {new_item['platform']}\n"
+        f"- Condition: {new_item['condition']}\n\n"
+        f"Outfit styling notes: {outfit}\n\n"
+        "The caption should feel authentic and personal, like a real thrift "
+        "find post, not a product description. Mention the item name, price, "
+        "and platform naturally (once each), and capture the outfit vibe in "
+        "specific terms. Casual language and an emoji or two are welcome."
+    )
+
+    # Step 3: call the LLM and return the response
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1.0,
+            max_tokens=200,
+        )
+        result = response.choices[0].message.content.strip()
+        if result:
+            return result
+        return (
+            f"Couldn't generate a fit card for {new_item['title']} — try again "
+            "in a moment."
+        )
+    except Exception:
+        return (
+            f"Couldn't generate a fit card for {new_item['title']} right now — "
+            "try again in a moment."
+        )
